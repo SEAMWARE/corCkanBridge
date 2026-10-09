@@ -19,22 +19,21 @@
 // The ckan bridge - the SEAM: what the broker calls, and the one symbol it looks for (bridgeRegister).
 // The contract is corBridge's BridgeDriver.h (broker -> plugin) and BridgeBroker.h (plugin -> broker).
 //
-// A bridge knows nothing about entities. It carries (endpoint, json, time) both ways:
+// A bridge knows nothing about entities. This one carries (endpoint, json, time) one way, in:
 //
-//   in   the transport delivers a value on an endpoint -> brokerP->sampleIn() -> the broker finds the
-//        endpoint's Channel and writes the value into the Channel's entity attribute
-//   out  an attribute a Channel carries is written -> publish(endpoint, json) -> the transport sends it
+//   endpoint  a CKAN DataStore resource id
+//   json      one record (row) of it
+//   time      the record's time column, or when its page was read
 //
-// Which endpoint is which attribute is the broker's: the Channels, from the "ngsild" section of this
-// bridge's member of the --bridgeConfig file. The plugin reads the rest of its member ("server").
-//
-// This file stays as it is in a real bridge, apart from the TODOs. The protocol is in ckanTransport.c.
+// Which entities a record becomes is the broker's: a RECORD Channel, from the "records" section of
+// this bridge's member of the --bridgeConfig file (coraine: COR_FEATURE_BRIDGE_RECORDS). The plugin
+// reads the rest of its member ("server": the portal) and each Channel's channelInfo (how to read the
+// resource). The transport - CKAN's Action API - is in ckanTransport.c.
 //
 #include <stdbool.h>                                  // bool
-#include <stdio.h>                                    // fopen, fread, fseek, ftell
-#include <stdlib.h>                                   // malloc, free
-#include <string.h>                                   // strdup
-#include <strings.h>                                  // strcasecmp
+#include <stdio.h>                                    // fopen, fread, fseek, ftell, snprintf
+#include <stdlib.h>                                   // malloc, free, strtol
+#include <string.h>                                   // strdup, strcmp
 
 #include "corLog/corLog.h"                            // COR_E, COR_W
 #include "corAlloc/CorAlloc.h"                        // CorAlloc
@@ -63,28 +62,49 @@ static const BridgeBroker* brokerP = NULL;
 
 // -----------------------------------------------------------------------------
 //
-// ckanReceive - the transport delivered a value: hand it to the broker
+// ckanReceive - a record: hand it to the broker
 //
 // On the transport's thread. The broker sets up its own per-request state inside sampleIn and takes
 // its own locks - the plugin prepares nothing. "ckan" is this bridge's alias: the broker finds the
 // Channel by (alias, endpoint).
 //
-// BRIDGE_NOT_FOUND is not an error: nothing claims the endpoint. BRIDGE_BAD_INPUT is a payload that is
-// not JSON - the broker has logged it and dropped the value.
+// BRIDGE_BAD_INPUT is a record the Channel's mapping makes no entity of (a column an id needs is
+// empty): the broker has said so in its log, and the read goes on.
 //
-// ⚠ json is a copy the transport made for this call and frees after it - never a string literal, and
-// never a buffer it reads again: coraine up to 0.4.0 parses the text IN PLACE, although the contract
-// says the plugin's text is left alone.
-//
-static void ckanReceive(const char* endpoint, const char* json, int64_t timeNs)
+static bool ckanReceive(const char* endpoint, const char* json, int64_t timeNs)
 {
   if (brokerP == NULL)
-    return;
+    return false;
 
   int r = brokerP->sampleIn("ckan", endpoint, json, timeNs);
 
-  if ((r != BRIDGE_OK) && (r != BRIDGE_NOT_FOUND))
-    COR_W("ckan: the value on '%s' was not taken (%d)", endpoint, r);
+  if ((r != BRIDGE_OK) && (r != BRIDGE_BAD_INPUT))
+    COR_W("ckan: a record of '%s' was not taken (%d)", endpoint, r);
+
+  return (r == BRIDGE_OK);
+}
+
+
+
+// -----------------------------------------------------------------------------
+//
+// channelStatus - tell the broker whether a Channel carries (ABI 12), else say it in the log only
+//
+// Built against corBridge headers from before ABI 12, the plugin has no channelStatusIn to call: the
+// log is then the only place a reason goes.
+//
+static void channelStatus(const char* endpoint, bool carrying, const char* reason)
+{
+#if BRIDGE_ABI_VERSION >= 12
+  if ((brokerP != NULL) && (brokerP->abiVersion >= 12) && (brokerP->channelStatusIn != NULL))
+  {
+    brokerP->channelStatusIn("ckan", endpoint, (carrying == true) ? BridgeChannelAvailable : BridgeChannelDormant, reason);
+    return;
+  }
+#endif
+
+  if (carrying == false)
+    COR_E("ckan: '%s' is not carried: %s (the broker shows no reason on the Channel: it has no channelStatusIn, bridge ABI 12)", endpoint, reason);
 }
 
 
@@ -123,15 +143,16 @@ static char* configLoad(const char* path)
 
 // -----------------------------------------------------------------------------
 //
-// ckanInit - bring the transport up
+// ckanInit - the portal, and the reader thread
 //
 // The --bridgeConfig file is one JSON object, one member per bridge alias. The broker reads every
 // member's "ngsild" section (the Channels); the rest of the member is the plugin's:
 //
-//   { "ckan": { "server": { ... }, "ngsild": { "topics": { "<endpoint>": { "entityId": ..., ... } } } } }
+//   { "ckan": { "server": { "url": "https://data.boston.gov" },
+//               "ngsild": { "records": { "<resource id>": { "channelInfo": [...], "entities": [...] } } } } }
 //
-// Called once, late in the broker's startup: the store and the Channels are up, so a value arriving on
-// the first callback has somewhere to land. The broker adds the Channels (channelAddInfo) after this.
+// Called once, late in the broker's startup. The portal is not contacted here - each resource is read
+// on the reader thread, once the broker has added its Channel (channelAddInfo).
 //
 static int ckanInit(const char* configFile, const BridgeBroker* _brokerP)
 {
@@ -154,12 +175,7 @@ static int ckanInit(const char* configFile, const BridgeBroker* _brokerP)
     serverP = (bridgeP != NULL) ? corTreeLookup(bridgeP, "server") : NULL;
   }
 
-  //
-  // TODO: whatever your transport needs to connect - a URL, credentials, a poll period - goes in
-  //       "server", and ckanTransportOpen reads it. Connect without waiting for the peer if you can:
-  //       the broker's startup should not hang, or fail, on a device that is not up yet.
-  //
-  int r = ckanTransportOpen(serverP, ckanReceive);
+  int r = ckanTransportOpen(serverP, ckanReceive, channelStatus);
 
   corAllocBufferReset(&ka, false);                    // nothing parsed here is kept
   free(text);                                         // after the tree: its strings point into it
@@ -182,17 +198,23 @@ static void ckanClose(void)
 
 // -----------------------------------------------------------------------------
 //
-// channelInfoText - "format" out of a Channel's channelInfo: false (and *whyP) for anything else
+// channelInfoRead - a Channel's channelInfo -> how to read its resource; false (and *whyP) for anything wrong
 //
-// channelInfo is how to read or carry an endpoint - JSON text, an array of {"key": "...", "value": "..."},
-// both strings, or NULL. The broker checks that shape and never a key: a key the plugin does not know is
-// the plugin's to refuse.
+// channelInfo is JSON text, an array of {"key": "...", "value": "..."}, both strings, or NULL. The broker
+// checks that shape and never a key: a key the plugin does not know is the plugin's to refuse.
 //
-// TODO: your transport's keys (a QoS, a data type, a scale factor)
+//   mode        once (the default) - read the resource at start, then stop
+//   pageSize    records per datastore_search call, 1-32000 (default 100)
+//   timeColumn  a column holding each record's time, ISO 8601; without it, the time the page was read
 //
-static bool channelInfoText(const char* info, bool* textP, const char** whyP)
+// The text is parsed in a copy; configP->timeColumn points into textBuf, the caller's, and lives as
+// long as it.
+//
+static bool channelInfoRead(const char* info, CkanEndpoint* configP, char* textBuf, int textBufSize, char* why, int whySize)
 {
-  *textP = false;
+  configP->mode       = CkanModeOnce;
+  configP->pageSize   = 100;
+  configP->timeColumn = NULL;
 
   if (info == NULL)
     return true;
@@ -204,7 +226,10 @@ static bool channelInfoText(const char* info, bool* textP, const char** whyP)
   bool     ok;
 
   if (copy == NULL)
+  {
+    snprintf(why, whySize, "out of memory");
     return false;
+  }
 
   corAllocBufferInit(&ka, buf, sizeof(buf), 4096, NULL, "ckan channelInfo");
   corJsonCreate(&cj, &ka);
@@ -212,24 +237,66 @@ static bool channelInfoText(const char* info, bool* textP, const char** whyP)
   CorNode* arrayP = corJsonParse(&cj, copy);
   ok = (arrayP != NULL) && (arrayP->type == CorArray);
 
+  if (ok == false)
+    snprintf(why, whySize, "channelInfo is not an array of {key, value}");
+
   for (CorNode* pairP = (ok == true) ? arrayP->value.head : NULL; (pairP != NULL) && (ok == true); pairP = pairP->next)
   {
-    CorNode*    keyP  = corTreeLookup(pairP, "key");
+    CorNode*    keyP   = corTreeLookup(pairP, "key");
     CorNode*    valueP = corTreeLookup(pairP, "value");
-    const char* key   = ((keyP   != NULL) && (keyP->type   == CorString)) ? keyP->value.s   : "";
-    const char* value = ((valueP != NULL) && (valueP->type == CorString)) ? valueP->value.s : "";
+    const char* key    = ((keyP   != NULL) && (keyP->type   == CorString)) ? keyP->value.s   : "";
+    const char* value  = ((valueP != NULL) && (valueP->type == CorString)) ? valueP->value.s : "";
 
-    if (strcasecmp(key, "format") != 0)
+    if (strcmp(key, "mode") == 0)
     {
-      ok    = false;
-      *whyP = "unknown channelInfo key ('format' is the one there is)";
+      if ((strcmp(value, "poll") == 0) || (strcmp(value, "push") == 0))
+      {
+        snprintf(why, whySize, "mode '%s' is not built yet - 'once' is", value);
+        ok = false;
+      }
+      else if (strcmp(value, "once") != 0)
+      {
+        snprintf(why, whySize, "mode '%s' - the modes are once, poll and push, and once is the one built", value);
+        ok = false;
+      }
     }
-    else if (strcmp(value, "text") == 0)
-      *textP = true;
-    else if (strcmp(value, "json") != 0)
+    else if (strcmp(key, "pageSize") == 0)
     {
-      ok    = false;
-      *whyP = "format must be 'json' or 'text'";
+      char* endP;
+      long  n = strtol(value, &endP, 10);
+
+      if ((*value == 0) || (*endP != 0) || (n < 1) || (n > 32000))
+      {
+        snprintf(why, whySize, "pageSize '%s' - an integer from 1 to 32000", value);
+        ok = false;
+      }
+      else
+        configP->pageSize = (int) n;
+    }
+    else if (strcmp(key, "timeColumn") == 0)
+    {
+      int len = strlen(value);
+
+      if ((len == 0) || (len >= textBufSize))
+      {
+        snprintf(why, whySize, "timeColumn - the name of a column");
+        ok = false;
+      }
+      else
+      {
+        memcpy(textBuf, value, len + 1);
+        configP->timeColumn = textBuf;
+      }
+    }
+    else if ((strcmp(key, "apiKey") == 0) || (strcmp(key, "Authorization") == 0))
+    {
+      snprintf(why, whySize, "'%s' in channelInfo - an API key goes in server.apiKey (or server.apiKeyEnv): channelInfo is shown on GET /ngsi-ld/v1/channels", key);
+      ok = false;
+    }
+    else
+    {
+      snprintf(why, whySize, "unknown channelInfo key '%s' (mode, pageSize, timeColumn)", key);
+      ok = false;
     }
   }
 
@@ -243,31 +310,47 @@ static bool channelInfoText(const char* info, bool* textP, const char** whyP)
 
 // -----------------------------------------------------------------------------
 //
-// ckanChannelAddInfo - start carrying an endpoint, ABI 9
+// ckanChannelAddInfo - start reading a resource, ABI 9
 //
-// Once per Channel, after init. For BridgeDirectionIn or Both the plugin subscribes and calls sampleIn
-// from then on; for Out, publish() must work. Topics only here: a service or an action is
-// BRIDGE_UNSUPPORTED, and the broker marks such a Channel dormant - as it does on BRIDGE_BAD_INPUT, with
-// the reason in GET /ngsi-ld/v1/channels.
+// Once per Channel, after init. Inbound topics only: a resource is read, nothing is written to the
+// portal (yet). A Channel refused here stays, dormant, with the reason - told to the broker
+// (channelStatusIn, ABI 12) before this returns, so GET /ngsi-ld/v1/channels shows it.
 //
 static int ckanChannelAddInfo(const char* endpoint, BridgeChannelKind kind, BridgeDirection direction, const char* info)
 {
-  const char* why = NULL;
-  bool        text;
+  char         why[256];
+  char         timeColumn[256];
+  CkanEndpoint config;
 
   if (kind != BridgeChannelTopic)
   {
-    COR_E("ckan: '%s': this bridge carries topics only", endpoint);
+    channelStatus(endpoint, false, "this bridge reads resources - a service or an action is not one");
     return BRIDGE_UNSUPPORTED;
   }
 
-  if (channelInfoText(info, &text, &why) == false)
+  if (direction != BridgeDirectionIn)
   {
-    COR_E("ckan: '%s': %s", endpoint, (why != NULL) ? why : "channelInfo is not an array of {key, value}");
+    channelStatus(endpoint, false, "this bridge reads resources, and writes none - a record Channel (\"records\") is inbound");
+    return BRIDGE_UNSUPPORTED;
+  }
+
+  if (channelInfoRead(info, &config, timeColumn, sizeof(timeColumn), why, sizeof(why)) == false)
+  {
+    COR_E("ckan: '%s': %s", endpoint, why);
+    channelStatus(endpoint, false, why);
     return BRIDGE_BAD_INPUT;
   }
 
-  return ckanTransportEndpointAdd(endpoint, direction, text);
+  const char* reason = NULL;
+  int         r      = ckanTransportEndpointAdd(endpoint, &config, &reason);
+
+  if (r != BRIDGE_OK)
+  {
+    COR_E("ckan: '%s': %s", endpoint, (reason != NULL) ? reason : "cannot be read");
+    channelStatus(endpoint, false, (reason != NULL) ? reason : "cannot be read");
+  }
+
+  return r;
 }
 
 
@@ -285,7 +368,7 @@ static int ckanChannelAdd(const char* endpoint, BridgeChannelKind kind, BridgeDi
 
 // -----------------------------------------------------------------------------
 //
-// ckanChannelDel - stop carrying an endpoint
+// ckanChannelDel - stop reading a resource
 //
 static int ckanChannelDel(const char* endpoint)
 {
@@ -296,28 +379,11 @@ static int ckanChannelDel(const char* endpoint)
 
 // -----------------------------------------------------------------------------
 //
-// ckanPublish - an attribute a Channel carries was written: send the value out
-//
-// On a BROKER thread, inside the request that wrote the attribute - hand the value to the transport and
-// return. json is borrowed: copy what is needed after the call. A value that arrived through sampleIn
-// is never published back out: the broker sees to that.
-//
-static int ckanPublish(const char* endpoint, const char* json)
-{
-  return ckanTransportSend(endpoint, json);
-}
-
-
-
-// -----------------------------------------------------------------------------
-//
-// ckanVersionInfo - one line for GET /version: the plugin, and what it links
-//
-// TODO: your transport library's version, e.g. "opcua 0.1.0 (open62541 1.4.6)"
+// ckanVersionInfo - one line for GET /version
 //
 static const char* ckanVersionInfo(void)
 {
-  return "ckan 0.1.0 (file transport)";
+  return "ckan 0.1.0 (CKAN Action API: datastore_search; mode once)";
 }
 
 
@@ -326,19 +392,12 @@ static const char* ckanVersionInfo(void)
 //
 // bridgeRegister - the one symbol the broker looks for, and the one this .so exports
 //
-// Everything else is hidden (-fvisibility=hidden in the makefile). A plugin written in C++ declares
-// it extern "C", or the broker's dlsym does not find it.
+// Everything else is hidden (-fvisibility=hidden in the makefile).
 //
 // The broker zeroes the struct, writes ITS BRIDGE_ABI_VERSION into abiVersion, and calls this. The struct
 // is the broker's, allocated at the size of ITS header: a slot newer than the broker is not there, so a
-// slot is filled only when the broker's abiVersion has it. A slot left NULL means "not supported".
-// abiVersion is then overwritten with this plugin's - the broker logs a mismatch and shows it in
-// GET /version.
-//
-// Not filled here, all optional: args (command-line options of the plugin's own), the service and
-// action entry points (ABI 2-4), notifySchemes + notify (ABI 10, notifications to a URI scheme of the
-// transport - corMqttBridge), serviceSchemes + serviceExecute + serviceCancel (ABI 11, Service
-// Execution). See BridgeDriver.h.
+// slot is filled only when the broker's abiVersion has it. A slot left NULL means "not supported" -
+// publish among them: nothing is written to a portal.
 //
 __attribute__((visibility("default"))) void bridgeRegister(BridgeDriver* driverP)
 {
@@ -353,7 +412,7 @@ __attribute__((visibility("default"))) void bridgeRegister(BridgeDriver* driverP
   driverP->versionInfo = ckanVersionInfo;
   driverP->channelAdd  = ckanChannelAdd;
   driverP->channelDel  = ckanChannelDel;
-  driverP->publish     = ckanPublish;
+  driverP->publish     = NULL;
 
   if (driverP->abiVersion >= 9)
     driverP->channelAddInfo = ckanChannelAddInfo;

@@ -1,0 +1,231 @@
+#
+# FILE            ckan_records.test
+#
+# Copyright 2026 Seamware
+# SPDX-License-Identifier: Apache-2.0
+#
+# A CKAN resource read once, record by record, and each record made into entities by a record Channel:
+# the 50 recorded Blue Bike stations of data.boston.gov (tools/ckanMock.py serves them), 20 to a page.
+#
+#   Number               -> the BikeStation's id
+#   Name, Total_docks,   -> Properties (Total_docks a number, Public_ a boolean)
+#   Public_
+#   Longitude, Latitude  -> location, a GeoProperty Point
+#   District             -> inDistrict, a Relationship to urn:ngsi-ld:District:<District>
+#                           - and the District itself, with its name
+#
+# Three pages (20, 20, 10 records), sorted by _id, each with the API key as its Authorization header;
+# the key is shown nowhere - not on GET /channels, not in the broker's log.
+#
+--NAME--
+ckan bridge - a resource's records, three pages, made into BikeStations and Districts
+
+--TAGS--
+bridge ckan
+
+--INIT--
+rm -rf "${CKAN_TEST_DIR:?}"
+mkdir -p "$CKAN_TEST_DIR"
+cat > $CKAN_TEST_DIR/bridges.json <<J
+{ "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT", "apiKey": "not-a-real-key-7f3a", "timeoutMs": 5000 },
+            "ngsild": { "defaultEntity": false, "records": {
+              "$CKAN_STATIONS": {
+                "channelInfo": [ { "key": "mode", "value": "once" }, { "key": "pageSize", "value": "20" } ],
+                "entities": [
+                  { "type": "BikeStation", "id": "urn:ngsi-ld:BikeStation:{Number}",
+                    "attributes": {
+                      "name":       { "column": "Name" },
+                      "totalDocks": { "column": "Total_docks", "as": "number" },
+                      "public":     { "column": "Public_", "as": "boolean" },
+                      "location":   { "point": { "longitude": "Longitude", "latitude": "Latitude" } },
+                      "inDistrict": { "relationship": "urn:ngsi-ld:District:{District}" } } },
+                  { "type": "District", "id": "urn:ngsi-ld:District:{District}",
+                    "attributes": { "name": { "column": "District" } } } ] } } } } }
+J
+mockStart not-a-real-key-7f3a
+brokerStart
+
+--RUN--
+echo "01. The resource is read - 50 records taken"
+echo "============================================"
+channelAwait $CKAN_STATIONS 'c["samplesIn"] == 50'
+channels
+echo
+echo
+
+
+echo "02. Three pages of 20, sorted by _id, the API key in the Authorization header"
+echo "=============================================================================="
+mockRequests
+echo
+echo
+
+
+echo "03. A station - its Properties, its location and its District"
+echo "=============================================================="
+entityGet urn:ngsi-ld:BikeStation:A32000
+echo
+echo
+
+
+echo "04. The last station (the third page), and one in Arlington"
+echo "============================================================"
+entityGet urn:ngsi-ld:BikeStation:B32007 name,inDistrict
+entityGet urn:ngsi-ld:BikeStation:L32001 name,inDistrict
+echo
+echo
+
+
+echo "05. 50 BikeStations, 2 Districts"
+echo "================================="
+echo "BikeStation: $(entityCount BikeStation)"
+echo "District:    $(entityCount District)"
+entityIds District
+entityGet urn:ngsi-ld:District:Arlington
+echo
+echo
+
+
+echo "06. The Channel on GET /channels - its mapping as the file wrote it, and no API key"
+echo "===================================================================================="
+curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/channels" | python3 -c 'import sys, json
+c = json.load(sys.stdin)[0]
+print(json.dumps({k: c[k] for k in ("channelTarget", "channelKind", "channelDirection", "channelInfo", "status")}, indent=2, sort_keys=True))
+print("recordEntities: %s" % [e["type"] for e in c["recordEntities"]])
+print("entity in it: %s" % ("entity" in c))'
+echo "the key on GET /channels: $(curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/channels" | grep -c not-a-real-key)"
+echo "the key in the broker's log: $(grep -c not-a-real-key "$CKAN_TEST_DIR/broker.log")"
+echo
+echo
+
+
+--TEARDOWN--
+brokerStop
+mockStop
+rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a failure
+
+--EXPECT--
+01. The resource is read - 50 records taken
+============================================
+44c931aa-4577-4caa-a8f2-ed1e38263e70 available samplesIn=50
+
+
+02. Three pages of 20, sorted by _id, the API key in the Authorization header
+==============================================================================
+limit=20&offset=0&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id auth=key
+limit=20&offset=20&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id auth=key
+limit=20&offset=40&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id auth=key
+
+
+03. A station - its Properties, its location and its District
+==============================================================
+{
+  "id": "urn:ngsi-ld:BikeStation:A32000",
+  "inDistrict": {
+    "object": "urn:ngsi-ld:District:Boston",
+    "observedAt": "<read time>",
+    "type": "Relationship"
+  },
+  "location": {
+    "observedAt": "<read time>",
+    "type": "GeoProperty",
+    "value": {
+      "coordinates": [
+        -71.0445714,
+        42.35339051
+      ],
+      "type": "Point"
+    }
+  },
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "Fan Pier"
+  },
+  "public": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": true
+  },
+  "totalDocks": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": 15
+  },
+  "type": "BikeStation"
+}
+
+
+04. The last station (the third page), and one in Arlington
+============================================================
+{
+  "id": "urn:ngsi-ld:BikeStation:B32007",
+  "inDistrict": {
+    "object": "urn:ngsi-ld:District:Boston",
+    "observedAt": "<read time>",
+    "type": "Relationship"
+  },
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "Seaport Square - Seaport Blvd at Northern Ave"
+  },
+  "type": "BikeStation"
+}
+{
+  "id": "urn:ngsi-ld:BikeStation:L32001",
+  "inDistrict": {
+    "object": "urn:ngsi-ld:District:Arlington",
+    "observedAt": "<read time>",
+    "type": "Relationship"
+  },
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "Railroad Lot and Minuteman Bikeway"
+  },
+  "type": "BikeStation"
+}
+
+
+05. 50 BikeStations, 2 Districts
+=================================
+BikeStation: 50
+District:    2
+urn:ngsi-ld:District:Arlington
+urn:ngsi-ld:District:Boston
+{
+  "id": "urn:ngsi-ld:District:Arlington",
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "Arlington"
+  },
+  "type": "District"
+}
+
+
+06. The Channel on GET /channels - its mapping as the file wrote it, and no API key
+====================================================================================
+{
+  "channelDirection": "in",
+  "channelInfo": [
+    {
+      "key": "mode",
+      "value": "once"
+    },
+    {
+      "key": "pageSize",
+      "value": "20"
+    }
+  ],
+  "channelKind": "topic",
+  "channelTarget": "44c931aa-4577-4caa-a8f2-ed1e38263e70",
+  "status": "available"
+}
+recordEntities: ['BikeStation', 'District']
+entity in it: False
+the key on GET /channels: 0
+the key in the broker's log: 0
+
+

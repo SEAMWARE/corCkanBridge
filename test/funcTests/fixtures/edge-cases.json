@@ -1,0 +1,10 @@
+{
+  "comment": "Written for the tests, not recorded: the records a real resource has now and then, in the columns of Boston's Blue Bike stations",
+  "records": [
+    { "_id": 1, "Number": "E1", "Name": "No district",      "Latitude": "42.35", "Longitude": "-71.05", "District": "",           "Public_": "No",  "Total_docks": "8" },
+    { "_id": 2, "Number": "",   "Name": "No number",        "Latitude": "42.36", "Longitude": "-71.06", "District": "Boston",     "Public_": "Yes", "Total_docks": "9" },
+    { "_id": 3, "Number": "E3", "Name": "No coordinates",   "Latitude": "",      "Longitude": "-71.07", "District": "Boston",     "Public_": "Yes", "Total_docks": "ten" },
+    { "_id": 4, "Number": "E4", "Name": "A district name with spaces", "Latitude": "42.38", "Longitude": "-71.08", "District": "South Boston", "Public_": "Yes", "Total_docks": 12 },
+    { "_id": 5, "Number": null, "Name": "Null number",      "Latitude": "42.39", "Longitude": "-71.09", "District": null,         "Public_": null,  "Total_docks": null }
+  ]
+}

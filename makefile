@@ -47,11 +47,9 @@ CFLAGS       += -DCOR_T_ON
 endif
 
 #
-# The broker is linked rdynamic, so corLog, corAlloc, corJson and corTree resolve from the running
-# process at dlopen - a plugin is built against the headers of the broker it is loaded into. Only the
-# transport's own library is linked here.
-#
-# TODO: add your transport library - e.g. -lopen62541 for OPC UA
+# The broker is linked rdynamic, so corLog, corAlloc, corJson, corTree - and corRest, whose HTTP(S)
+# client this bridge uses - resolve from the running process at dlopen: a plugin is built against the
+# headers of the broker it is loaded into. CKAN needs no library of its own.
 #
 LIBS          = -lpthread
 
@@ -114,8 +112,11 @@ contract: | $(COR_LIBS)/corBridge/BridgeDriver.h
 #
 CORTEST      ?= $(shell command -v corTest || echo $(COR_LIBS)/corTest/corTest)
 
+# COR_TEST_NO_REAP=on: corTest's start-up reaping (killall coraine, and its mock clients) is for
+# coraine's own suite. These tests stop their own broker and portal by pid.
+#
 test: all
-	$(CORTEST) --noColor
+	COR_TEST_NO_REAP=on $(CORTEST) --noColor
 
 clean:
 	rm -f src/*.o src/*.d *.so *~ .flags

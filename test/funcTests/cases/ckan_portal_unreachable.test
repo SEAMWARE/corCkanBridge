@@ -1,0 +1,60 @@
+#
+# FILE            ckan_portal_unreachable.test
+#
+# Copyright 2026 Seamware
+# SPDX-License-Identifier: Apache-2.0
+#
+# A portal that cannot be reached does not keep the broker from starting: the Channel is tried three
+# times (again after 1 s, then after 3 s), then shown dormant, with why.
+#
+--NAME--
+ckan bridge - a portal nobody answers on: the broker starts, the Channel goes dormant after three tries
+
+--TAGS--
+bridge ckan
+
+--INIT--
+rm -rf "${CKAN_TEST_DIR:?}"
+mkdir -p "$CKAN_TEST_DIR"
+cat > $CKAN_TEST_DIR/bridges.json <<J
+{ "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT", "timeoutMs": 2000 },
+            "ngsild": { "defaultEntity": false, "records": {
+              "$CKAN_STATIONS": { "entities": [ { "type": "BikeStation", "id": "urn:ngsi-ld:BikeStation:{Number}" } ] } } } } }
+J
+brokerStart                                           # and no mockStart: nothing listens on the portal's port
+
+--RUN--
+echo "01. The broker answers at once; the Channel is available while it is tried"
+echo "==========================================================================="
+brokerAlive
+channels
+echo
+echo
+
+
+echo "02. After three tries: dormant, and why"
+echo "======================================="
+channelAwait $CKAN_STATIONS 'c["status"] == "dormant"' 20
+channels
+brokerAlive
+echo
+echo
+
+
+--TEARDOWN--
+brokerStop
+rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a failure
+
+--EXPECT--
+01. The broker answers at once; the Channel is available while it is tried
+===========================================================================
+broker up, GET /version: 200
+44c931aa-4577-4caa-a8f2-ed1e38263e70 available samplesIn=0
+
+
+02. After three tries: dormant, and why
+=======================================
+44c931aa-4577-4caa-a8f2-ed1e38263e70 dormant samplesIn=0 - the portal cannot be reached: Connection failed (-2)
+broker up, GET /version: 200
+
+

@@ -1,0 +1,90 @@
+#
+# FILE            ckan_channel_status.test
+#
+# Copyright 2026 Seamware
+# SPDX-License-Identifier: Apache-2.0
+#
+# What a Channel that cannot be read shows on GET /ngsi-ld/v1/channels - dormant, and why in the
+# bridge's own words - while the broker stays up and the Channels that can be read are:
+#
+#   no-such-resource   the portal answers 404 - its own message is the reason
+#   retry-503          the portal answers 503, then the records: read after one retry
+#   polled             mode poll - not built yet
+#   keyed              an API key in channelInfo - refused: channelInfo is shown on GET /channels
+#   bad!id             not a resource id
+#
+--NAME--
+ckan bridge - a resource the portal does not have, a 503, and refused channelInfo: dormant with the reason
+
+--TAGS--
+bridge ckan
+
+--INIT--
+rm -rf "${CKAN_TEST_DIR:?}"
+mkdir -p "$CKAN_TEST_DIR"
+mapping='"entities": [ { "type": "BikeStation", "id": "urn:ngsi-ld:BikeStation:{Number}", "attributes": { "name": { "column": "Name" } } } ]'
+cat > $CKAN_TEST_DIR/bridges.json <<J
+{ "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT" },
+            "ngsild": { "defaultEntity": false, "records": {
+              "no-such-resource": { $mapping },
+              "retry-503":        { $mapping },
+              "polled":           { "channelInfo": [ { "key": "mode", "value": "poll" } ], $mapping },
+              "keyed":            { "channelInfo": [ { "key": "apiKey", "value": "not-a-real-key-7f3a" } ], $mapping },
+              "bad!id":           { $mapping } } } } }
+J
+mockStart
+brokerStart
+
+--RUN--
+echo "01. retry-503 read after a retry; the rest dormant, each with its reason"
+echo "========================================================================"
+channelAwait retry-503 'c["samplesIn"] == 50'
+channelAwait no-such-resource 'c["status"] == "dormant"'
+channels
+echo
+echo
+
+
+echo "02. What the portal was asked - nothing for the Channels refused"
+echo "================================================================"
+mockRequests | sort
+echo
+echo
+
+
+echo "03. The broker is up, and has the stations of retry-503"
+echo "======================================================="
+brokerAlive
+echo "BikeStation: $(entityCount BikeStation)"
+echo
+echo
+
+
+--TEARDOWN--
+brokerStop
+mockStop
+rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a failure
+
+--EXPECT--
+01. retry-503 read after a retry; the rest dormant, each with its reason
+========================================================================
+bad!id dormant samplesIn=0 - not a CKAN resource id - a UUID or a DataStore alias: letters, digits, '.', '_', '-'
+keyed dormant samplesIn=0 - 'apiKey' in channelInfo - an API key goes in server.apiKey (or server.apiKeyEnv): channelInfo is shown on GET /ngsi-ld/v1/channels
+no-such-resource dormant samplesIn=0 - the portal answered 404 - Not Found Error: Not found: Resource "no-such-resource" was not found.
+polled dormant samplesIn=0 - mode 'poll' is not built yet - 'once' is
+retry-503 available samplesIn=50
+
+
+02. What the portal was asked - nothing for the Channels refused
+================================================================
+limit=100&offset=0&resource_id=no-such-resource&sort=_id auth=none
+limit=100&offset=0&resource_id=retry-503&sort=_id auth=none
+limit=100&offset=0&resource_id=retry-503&sort=_id auth=none
+
+
+03. The broker is up, and has the stations of retry-503
+=======================================================
+broker up, GET /version: 200
+BikeStation: 50
+
+

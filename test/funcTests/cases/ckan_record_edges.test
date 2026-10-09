@@ -1,0 +1,174 @@
+#
+# FILE            ckan_record_edges.test
+#
+# Copyright 2026 Seamware
+# SPDX-License-Identifier: Apache-2.0
+#
+# The records a real resource has now and then (fixtures/edge-cases.json - written for the test, in the
+# columns of Boston's Blue Bike stations), read two to a page:
+#
+#   E1           District ""            -> no inDistrict, and no District from this record
+#   (no Number)  Number ""              -> no BikeStation; its District still made
+#   E3           Latitude "", docks "ten" -> no location, no totalDocks
+#   E4           District "South Boston" -> urn:ngsi-ld:District:South_Boston, named "South Boston";
+#                Total_docks 12 (a JSON number) stays 12
+#   (all null)   Number null, District null -> no entity at all: the record is not taken
+#
+# So 4 records taken of 5, in three pages (2, 2, 1).
+#
+--NAME--
+ckan bridge - empty, null and unreadable columns: what each record still makes
+
+--TAGS--
+bridge ckan
+
+--INIT--
+rm -rf "${CKAN_TEST_DIR:?}"
+mkdir -p "$CKAN_TEST_DIR"
+cat > $CKAN_TEST_DIR/bridges.json <<J
+{ "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT" },
+            "ngsild": { "defaultEntity": false, "records": {
+              "edge-cases": {
+                "channelInfo": [ { "key": "pageSize", "value": "2" } ],
+                "entities": [
+                  { "type": "BikeStation", "id": "urn:ngsi-ld:BikeStation:{Number}",
+                    "attributes": {
+                      "name":       { "column": "Name" },
+                      "totalDocks": { "column": "Total_docks", "as": "number" },
+                      "public":     { "column": "Public_", "as": "boolean" },
+                      "location":   { "point": { "longitude": "Longitude", "latitude": "Latitude" } },
+                      "inDistrict": { "relationship": "urn:ngsi-ld:District:{District}" } } },
+                  { "type": "District", "id": "urn:ngsi-ld:District:{District}",
+                    "attributes": { "name": { "column": "District" } } } ] } } } } }
+J
+mockStart
+brokerStart
+
+--RUN--
+echo "01. Three pages of 2, 2 and 1 - 4 records taken of 5"
+echo "====================================================="
+channelAwait edge-cases 'c["samplesIn"] == 4'
+sleep 0.3                                             # time for a fifth, were there one
+channels
+mockRequests
+echo
+echo
+
+
+echo "02. The BikeStations: E1, E3, E4 - and what each has"
+echo "====================================================="
+entityIds BikeStation
+entityGet urn:ngsi-ld:BikeStation:E1
+entityGet urn:ngsi-ld:BikeStation:E3
+entityGet urn:ngsi-ld:BikeStation:E4 totalDocks,inDistrict
+echo
+echo
+
+
+echo "03. The Districts: Boston, and South Boston under an id it can have"
+echo "===================================================================="
+entityIds District
+entityGet urn:ngsi-ld:District:South_Boston
+echo
+echo
+
+
+--TEARDOWN--
+brokerStop
+mockStop
+rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a failure
+
+--EXPECT--
+01. Three pages of 2, 2 and 1 - 4 records taken of 5
+=====================================================
+edge-cases available samplesIn=4
+limit=2&offset=0&resource_id=edge-cases&sort=_id auth=none
+limit=2&offset=2&resource_id=edge-cases&sort=_id auth=none
+limit=2&offset=4&resource_id=edge-cases&sort=_id auth=none
+
+
+02. The BikeStations: E1, E3, E4 - and what each has
+=====================================================
+urn:ngsi-ld:BikeStation:E1
+urn:ngsi-ld:BikeStation:E3
+urn:ngsi-ld:BikeStation:E4
+{
+  "id": "urn:ngsi-ld:BikeStation:E1",
+  "location": {
+    "observedAt": "<read time>",
+    "type": "GeoProperty",
+    "value": {
+      "coordinates": [
+        -71.05,
+        42.35
+      ],
+      "type": "Point"
+    }
+  },
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "No district"
+  },
+  "public": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": false
+  },
+  "totalDocks": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": 8
+  },
+  "type": "BikeStation"
+}
+{
+  "id": "urn:ngsi-ld:BikeStation:E3",
+  "inDistrict": {
+    "object": "urn:ngsi-ld:District:Boston",
+    "observedAt": "<read time>",
+    "type": "Relationship"
+  },
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "No coordinates"
+  },
+  "public": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": true
+  },
+  "type": "BikeStation"
+}
+{
+  "id": "urn:ngsi-ld:BikeStation:E4",
+  "inDistrict": {
+    "object": "urn:ngsi-ld:District:South_Boston",
+    "observedAt": "<read time>",
+    "type": "Relationship"
+  },
+  "totalDocks": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": 12
+  },
+  "type": "BikeStation"
+}
+
+
+03. The Districts: Boston, and South Boston under an id it can have
+====================================================================
+urn:ngsi-ld:District:Boston
+urn:ngsi-ld:District:South_Boston
+{
+  "id": "urn:ngsi-ld:District:South_Boston",
+  "name": {
+    "observedAt": "<read time>",
+    "type": "Property",
+    "value": "South Boston"
+  },
+  "type": "District"
+}
+
+

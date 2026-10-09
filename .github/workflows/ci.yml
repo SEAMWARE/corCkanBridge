@@ -2,6 +2,10 @@
 # Build the bridge against the cor stack, check it still satisfies the bridge contract, and run its
 # functional tests against a broker built from the same stack.
 #
+# The tests need a broker with record Channels (coraine: COR_FEATURE_BRIDGE_RECORDS) and the Channel
+# status a bridge reports (COR_FEATURE_CHANNEL_STATUS_IN, corBridge ABI 12) - coraine's and corBridge's
+# main once those are merged. The CKAN portal is tools/ckanMock.py: no internet.
+#
 # The job runs inside the cor stack's CI base image - the image coraine's own CI uses - and the repos
 # are SIBLINGS, as on a workstation: this one in stack/<repo>, corLibs' bootstrap.sh clones the cor
 # libs beside it, coraine is checked out beside them. The tests need no database server: the broker
@@ -83,3 +87,4 @@ jobs:
             stack/bridge/test/funcTests/cases/*.diff
             stack/bridge/test/funcTests/cases/*.stderr
             /tmp/ckan-bridge-test/broker.log
+            /tmp/ckan-bridge-test/mock.log

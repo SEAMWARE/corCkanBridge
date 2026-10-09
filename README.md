@@ -1,101 +1,106 @@
 # corCkanBridge
 
-A **bridge plugin** for the coraine NGSI-LD broker: `ckan.so`, a working bridge with a tiny example
-transport, to be turned into a real one - OPC UA, CKAN, Philips Hue, anything the broker does not
-speak. It builds, loads into a broker, and carries a value each way before a line of its own is
-written.
+A **bridge plugin** for the coraine NGSI-LD broker: `ckan.so` reads open data from a
+[CKAN](https://ckan.org) portal - the data portal behind many city and government open-data sites -
+and the broker makes entities of it. Each row of a DataStore resource is one record; a **record
+Channel** in the broker says which entities a record becomes: which column is the entity id, which
+columns are Properties, which two make a `location` Point, which one names another entity
+(a Relationship).
 
+    CKAN portal  --datastore_search-->  ckan.so  --(resource id, row, time)-->  broker  --record Channel-->  entities
 
-## What a bridge is
+The bridge **knows nothing about entities**: it carries `(endpoint, json, time)` - the resource id,
+one row as a JSON object, the row's time - and the mapping is the broker's.
 
-A bridge connects the broker to a foreign transport. It **knows nothing about entities**: it carries
-`(endpoint, json, time)` in both directions, and nothing else.
+## What it does
 
-    device <-> transport <-> ckan.so <-> broker <-> Channel <-> entity attribute
-                                     sampleIn()  ->            (in)
-                                     publish()   <-            (out)
+**Mode `once`**: when the broker starts, every configured resource is read whole, page by page
+(`datastore_search`, `limit`/`offset`, sorted by `_id`), each row handed to the broker, and the
+resource is done. A restart reads it again; the broker's write is an upsert, so the same rows leave the
+same entities.
 
-- **Endpoint** - the transport's own name for a value: an MQTT topic, a Modbus register, an OPC UA
-  node id. Exact, as the wire spells it.
-- **Channel** - *this endpoint <-> this entity attribute, this direction*. Channels live in the
-  broker, which configures them from the `--bridgeConfig` file and shows them on
-  `GET /ngsi-ld/v1/channels`. A Channel the bridge refuses stays, `dormant`, with the reason.
-- **Bridge** - one transport instance (one connection, one server), `GET /ngsi-ld/v1/bridges`.
-  `--bridges ckan` loads the plugin; it is never loaded at runtime or inferred from configuration.
-- **In** - a value arrives on an endpoint; the plugin calls `brokerP->sampleIn(alias, endpoint, json,
-  timeNs)` from its own thread; the broker writes it into the Channel's attribute (`observedAt` =
-  the time), notifies, and records the temporal event.
-- **Out** - an attribute a Channel carries is written; the broker calls `publish(endpoint, json)`
-  inside that request; the plugin sends it. A value that came in from a transport is never published
-  back out (the broker sees to that); the plugin keeps its own writes from coming back in as samples.
+- **HTTP(S)** is the broker's own client (corRest, resolved from the running broker): nothing is linked
+  into the plugin.
+- **The time** of a row is its `timeColumn` (ISO 8601), if the Channel names one; else when its page
+  was read. It becomes `observedAt` on every attribute the row writes.
+- **Failures**: a portal that cannot be reached, a timeout or a 5xx is tried three times (again after
+  1 s, then 3 s); a 4xx is the answer. A resource that cannot be read leaves its Channel **dormant**,
+  with the portal's own reason, on `GET /ngsi-ld/v1/channels` - `the portal answered 404 - Not Found
+  Error: Not found: Resource "..." was not found.` The broker starts and stays up whatever the portal
+  does; the portal is not contacted before the broker is up.
+- **The API key** is sent as the `Authorization` header and appears nowhere else: not in a log line,
+  not on `GET /ngsi-ld/v1/channels`.
 
-## The contract
-
-`corBridge/BridgeDriver.h` (what the plugin fills in) and `corBridge/BridgeBroker.h` (what the broker
-offers). In the order the broker uses them:
-
-| entry point | thread | what the plugin does |
-|---|---|---|
-| `bridgeRegister(BridgeDriver*)` | broker, at load | the one exported symbol: fills in the driver - alias, version, the entry points it has |
-| `init(configFile, brokerP)` | broker, late in startup | keeps `brokerP`; reads its member of the `--bridgeConfig` file; brings the transport up |
-| `channelAddInfo(endpoint, kind, direction, info)` | broker | per Channel, after `init`: checks the endpoint and `channelInfo`, subscribes |
-| `brokerP->sampleIn(...)` | the plugin's own | a value arrived |
-| `publish(endpoint, json)` | broker, inside the request | hands the value to the transport and returns - must not block |
-| `channelDel(endpoint)` | broker | stops carrying an endpoint (not called yet: Channels come from the file only) |
-| `close()` | broker, at shutdown | returns only when no plugin thread can call `sampleIn` any more |
-| `versionInfo()` | broker | one line for `GET /version` |
-
-- **NULL means "not supported".** A slot the plugin leaves NULL is answered `BRIDGE_UNSUPPORTED` by
-  the broker. Optional slots: `args` (command-line options of the plugin's own), services and actions
-  (ABI 2-4), `notifySchemes` + `notify` (notifications to a URI scheme - corMqttBridge), Service
-  Execution (ABI 11).
-- **The ABI handshake.** The broker zeroes the driver, writes *its* `BRIDGE_ABI_VERSION` into
-  `abiVersion` and calls `bridgeRegister`. The struct is the broker's, at the size of its header: the
-  plugin fills in only the slots that version has (`channelAddInfo` from ABI 9), then writes its own
-  version back. On the broker side (`BridgeBroker`), an upcall newer than ABI 1 is called only after
-  checking `brokerP->abiVersion` and that the pointer is not NULL.
-- **Plain data across the seam**: `const char*` and `int64_t`. `json` passed to the plugin is
-  borrowed: copy what is needed after the call. Return codes: `BRIDGE_OK`, `BRIDGE_ERR`,
-  `BRIDGE_NOT_FOUND`, `BRIDGE_UNSUPPORTED`, `BRIDGE_BAD_INPUT`.
-- **Built against the broker's headers.** The broker is linked `-rdynamic`: `corLog`, `corJson`,
-  `corTree` and `corAlloc` resolve from the running broker at `dlopen`, and nothing of the cor stack is
-  linked into the plugin - so it is built against the headers of the broker it is loaded into.
-- **Logging**: `COR_E` / `COR_W` / `COR_V` (corLog) for the plugin's own lines;
-  `brokerP->logFunction` to forward the transport library's own log sink.
-
-## Where each piece goes
-
-| file | what | in a real bridge |
-|---|---|---|
-| `src/ckanRegister.c` | the seam: `bridgeRegister`, the driver entry points, the bridge's configuration | stays; the TODOs: channelInfo keys, version line |
-| `src/ckanTransport.h` | the transport's interface: open, close, add/remove an endpoint, send; a receive callback | stays, or grows |
-| `src/ckanTransport.c` | the example transport: a directory of files, polled | replaced by the protocol |
-| `test/funcTests/cases/bridge_ckan.test` | a broker with this plugin: a value in, a value out, no echo, a refused endpoint | the device becomes the protocol's test peer |
-| `test/funcTests/corTestFunctions.sh` | `brokerStart`, `deviceWrite`, `entityAwait`, `channels`, ... | `deviceWrite` / `deviceAwait` talk to the peer |
-| `makefile` | `debug` / `release`, `install`, `contract`, `test` | add the transport library to `LIBS` |
-| `.github/workflows/ci.yml` | contract check, both builds, the tests, against the cor stack | install the transport library |
+`poll` (follow the dataset's activity stream, then read the new rows by `_id`, or the whole resource
+when it was replaced) and `push` (a webhook, where the portal has `ckanext-webhooks`) are reserved
+mode names, refused today with the reason "not built yet".
 
 ## Configuration
 
-One `--bridgeConfig` file serves every bridge: one member per alias. The `ngsild` section is the
-broker's - it makes the Channels; everything else in the member is the plugin's.
+One `--bridgeConfig` file serves every bridge: one member per alias. `server` is this plugin's; the
+`ngsild` section is the broker's - its `records` make the Channels, one per resource.
 
 ```json
-{ "ckan": { "server": { "dir": "/var/lib/ckan", "pollMs": 1000 },
-            "ngsild": { "topics": {
-              "tank1/level": { "entityId": "urn:ngsi-ld:Tank:T1", "entityType": "Tank", "attribute": "level" },
-              "tank1/state": { "entityId": "urn:ngsi-ld:Tank:T1", "entityType": "Tank", "attribute": "state",
-                               "channelInfo": [ { "key": "format", "value": "text" } ] } } } } }
+{ "ckan": {
+    "server": { "url": "https://data.boston.gov", "timeoutMs": 30000 },
+    "ngsild": {
+      "defaultEntity": false,
+      "records": {
+        "44c931aa-4577-4caa-a8f2-ed1e38263e70": {
+          "channelInfo": [ { "key": "mode",     "value": "once" },
+                           { "key": "pageSize", "value": "100"  } ],
+          "entities": [
+            { "type": "BikeStation", "id": "urn:ngsi-ld:BikeStation:{Number}",
+              "attributes": {
+                "name":       { "column": "Name" },
+                "totalDocks": { "column": "Total_docks", "as": "number" },
+                "public":     { "column": "Public_", "as": "boolean" },
+                "location":   { "point": { "longitude": "Longitude", "latitude": "Latitude" } },
+                "inDistrict": { "relationship": "urn:ngsi-ld:District:{District}" } } },
+            { "type": "District", "id": "urn:ngsi-ld:District:{District}",
+              "attributes": { "name": { "column": "District" } } } ] } } } } }
 ```
 
-- A Channel's direction is `both` and every configured attribute exists from startup, with the value
-  `"uninitialized"` until the first sample.
-- `channelInfo` - how to read or carry one endpoint - is checked by the broker for its shape (an array
-  of `{"key", "value"}` strings) and never for its keys: an unknown key is the plugin's to refuse
-  (`BRIDGE_BAD_INPUT`).
-- The example transport: an endpoint is a file path under `server.dir`; a file whose content changes
-  is a sample, its modification time the sample's time; a published value is written into the file.
-  `format: text` makes the content a JSON string; the default, `json`, takes it as JSON.
+That is Boston's Blue Bike stations (data.boston.gov, licence ODC PDDL): 572 rows become 572
+`BikeStation`s, each with a Relationship to one of 13 `District`s.
+
+### `server` - the portal
+
+| member | | |
+|---|---|---|
+| `url` | mandatory | the portal, `https://...` or `http://...` |
+| `apiKey` | optional | a CKAN API token, sent as `Authorization` - for a private resource |
+| `apiKeyEnv` | optional | the name of an environment variable holding the token, instead of `apiKey` |
+| `timeoutMs` | optional | one HTTP request, 100-600000, default 30000 |
+
+### `channelInfo` - how to read one resource
+
+| key | | |
+|---|---|---|
+| `mode` | `once` | the default and the one built; `poll` and `push` are refused, "not built yet" |
+| `pageSize` | `1`-`32000` | rows per `datastore_search` call, default 100 |
+| `timeColumn` | a column | each row's time, ISO 8601 (`2026-10-09T12:00:00Z`, `2026-10-09 12:00:00`, `2026-10-09`); a row without a readable one gets its read time |
+
+An API key in `channelInfo` is refused (the Channel is dormant, and says why): `channelInfo` is shown
+on `GET /ngsi-ld/v1/channels`. Any other key is refused as unknown.
+
+### `records` - the broker's record Channels
+
+The endpoint (the member's name) is the resource id: a UUID, or a DataStore alias (letters, digits,
+`.`, `_`, `-`). `entities` lists what each row makes:
+
+- `id` - a template: `{Column}` is the column's value, each character outside `[A-Za-z0-9._-]`
+  replaced by `_` (`South Boston` -> `South_Boston`). A row without a value in a column the id names
+  makes no entity of this kind.
+- `attributes` - `{ "column": ... }` a Property (`"as": "number" | "boolean" | "string"` converts
+  `"15"` to 15, `"Yes"` to true); `{ "point": { "longitude": ..., "latitude": ... } }` a GeoProperty
+  Point; `{ "relationship": <template> }` a Relationship. A row without a value for one - an absent,
+  null or empty column, a value that does not convert - leaves that attribute out.
+
+All the entities of one row are written as one batch upsert with `options=update`: created when they
+are not there, their mapped attributes replaced, any other attribute left alone. Record Channels are
+coraine's (`COR_FEATURE_BRIDGE_RECORDS`): see coraine's
+[Bridges and Channels](https://github.com/SEAMWARE/coraine/blob/main/doc/bridge-channels.md#record-channels).
 
 ## Building
 
@@ -110,33 +115,50 @@ Without siblings and with the **coraine-dev** package installed, the source of t
 a broker built with `coraine-build <dir>`: `make COR_LIBS=<dir>`, and
 `make install PLUGIN_DIR=<dir>/install/plugins/bridge`.
 
+It needs a broker with record Channels (coraine, `COR_FEATURE_BRIDGE_RECORDS`). With corBridge
+headers of ABI 12 and a broker that has `channelStatusIn` (`COR_FEATURE_CHANNEL_STATUS_IN`), a
+Channel that cannot be read says why on `GET /ngsi-ld/v1/channels`; without, only the broker's log
+does.
+
 ## Testing
 
     make test
 
+No internet: `test/funcTests/tools/ckanMock.py` is the portal, answering from
+`test/funcTests/fixtures/` - three pages of data.boston.gov's Blue Bike stations (resource
+`44c931aa-4577-4caa-a8f2-ed1e38263e70`, rows 1-50, recorded 2026-10-09, licence
+[ODC PDDL](https://opendatacommons.org/licenses/pddl/)), its answer for a resource it does not have,
+and `edge-cases.json` (written for the tests, not recorded: empty, null and unreadable columns).
+
 Starts `coraine` (from `PATH`: the coraine package, or `. <dir>/install/env` after `coraine-build`) on
-port 19026 with ramDB - no database server - loads `./ckan.so` by path, and runs
-`test/funcTests/cases/*.test` with corTest (`PATH`, or `CORTEST=`). `CKAN_BROKER`, `CKAN_PORT` and
-`CKAN_TEST_DIR` override; the broker's log is `/tmp/ckan-bridge-test/broker.log`.
+port 19026 with ramDB - no database server - and the mock on 19027, loads `./ckan.so` by path, and runs
+`test/funcTests/cases/*.test` with corTest (`PATH`, or `CORTEST=`). `CKAN_BROKER`, `CKAN_PORT`,
+`CKAN_MOCK_PORT` and `CKAN_TEST_DIR` override; the logs are `/tmp/ckan-bridge-test/broker.log` and
+`mock.log`.
+
+| test | |
+|---|---|
+| `ckan_records` | 50 rows in three pages of 20 -> 50 BikeStations (Properties, location, Relationship) and 2 Districts; the API key sent, and shown nowhere |
+| `ckan_record_edges` | empty, null and unreadable columns: what each row still makes; a row that makes nothing is not taken |
+| `ckan_channel_status` | a resource the portal does not have, a 503 then the rows, refused `channelInfo`: dormant with the reason, the broker up |
+| `ckan_portal_unreachable` | nothing listening: the broker starts, the Channel goes dormant after three tries |
 
 ## Running
 
     coraine --bridges ckan --bridgeConfig bridges.json            # installed in <plugin dir>/bridge
     coraine --bridges $PWD/ckan.so --bridgeConfig bridges.json    # a path: used as it is
 
-The plugin directory is `/opt/seamware/plugins`, or `$SEAMWARE_PLUGIN_DIR`.
+The plugin directory is `/opt/seamware/plugins`, or `$SEAMWARE_PLUGIN_DIR`. With the configuration
+above, against data.boston.gov: 572 rows in 6 pages, 572 BikeStations and 13 Districts, the read
+taking 0.96 s (a debug build, on 2026-10-09).
 
 ## Further reading
 
 - [corBridge](https://github.com/SEAMWARE/corBridge) - the contract; every entry point is documented
   in `BridgeDriver.h` and `BridgeBroker.h`
 - coraine: [Bridges and Channels](https://github.com/SEAMWARE/coraine/blob/main/doc/bridge-channels.md),
-  [the full reference](https://github.com/SEAMWARE/coraine/blob/main/doc/bridge-channels-details.md),
-  [plugin architecture](https://github.com/SEAMWARE/coraine/blob/main/doc/plugin-architecture.md)
-- Real bridges: [corMqttBridge](https://github.com/SEAMWARE/corMqttBridge) (a library's own thread,
-  notifications), [corModbusBridge](https://github.com/SEAMWARE/corModbusBridge) (polling, a write
-  queue), the broker's `src/plugins/bridge/loopback` (every entry point, services and actions)
-- [corTest](https://github.com/SEAMWARE/corTest) - the test runner
+  [the full reference](https://github.com/SEAMWARE/coraine/blob/main/doc/bridge-channels-details.md)
+- CKAN's [DataStore API](https://docs.ckan.org/en/latest/maintaining/datastore.html#the-datastore-api)
 
 ---
 
