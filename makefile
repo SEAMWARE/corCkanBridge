@@ -90,7 +90,7 @@ $(COR_LIBS)/corBridge/BridgeDriver.h:
 
 install: all
 	mkdir -p $(PLUGIN_DIR)
-	cp -p $(PLUGIN) $(PLUGIN_DIR)/
+	cp -p $(PLUGIN) $(PLUGIN_DIR)/.$(PLUGIN).new && mv -f $(PLUGIN_DIR)/.$(PLUGIN).new $(PLUGIN_DIR)/$(PLUGIN)   # a rename: a running broker keeps the file it mapped
 
 di: install
 ci: clean install
