@@ -74,6 +74,12 @@ jobs:
 
       - name: Functional tests
         working-directory: stack/bridge
+        #
+        # corTest sorts JSON bodies with the corJson tool and refuses to run without it: built with corJson,
+        # not on PATH here (as in coraine's ci.yml)
+        #
+        env:
+          CORJSON: ${{ github.workspace }}/stack/corJson/bin/corJson
         run: make test CORTEST=../corLibs/bin/corTest
 
       - name: Keep what a failing test left
