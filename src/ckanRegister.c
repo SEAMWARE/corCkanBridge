@@ -23,12 +23,12 @@
 //
 //   endpoint  a CKAN DataStore resource id
 //   json      one record (row) of it
-//   time      the record's time column, or when its page was read
+//   time      the record's time column; 0 (no time - no observedAt) without one
 //
-// Which entities a record becomes is the broker's: a RECORD Channel, from the "records" section of
-// this bridge's member of the --bridgeConfig file (coraine: COR_FEATURE_BRIDGE_RECORDS). The plugin
-// reads the rest of its member ("server": the portal) and each Channel's channelInfo (how to read the
-// resource). The transport - CKAN's Action API - is in ckanTransport.c.
+// Which entities a record becomes is the broker's: a DATACHANNEL, from the "dataChannels" section of
+// this bridge's member of the --bridgeConfig file (coraine: COR_FEATURE_DATA_CHANNELS). The plugin
+// reads the rest of its member ("server": the portal) and each DataChannel's channelInfo (how to read
+// the resource). The transport - CKAN's Action API - is in ckanTransport.c.
 //
 #include <stdbool.h>                                  // bool
 #include <stdio.h>                                    // fopen, fread, fseek, ftell, snprintf
@@ -149,10 +149,10 @@ static char* configLoad(const char* path)
 // member's "ngsild" section (the Channels); the rest of the member is the plugin's:
 //
 //   { "ckan": { "server": { "url": "https://data.boston.gov" },
-//               "ngsild": { "records": { "<resource id>": { "channelInfo": [...], "entities": [...] } } } } }
+//               "ngsild": { "dataChannels": { "<resource id>": { "channelInfo": [...], "entities": [...] } } } } }
 //
 // Called once, late in the broker's startup. The portal is not contacted here - each resource is read
-// on the reader thread, once the broker has added its Channel (channelAddInfo).
+// on the reader thread, once the broker has handed it the DataChannel's endpoint (channelAddInfo).
 //
 static int ckanInit(const char* configFile, const BridgeBroker* _brokerP)
 {
@@ -290,7 +290,7 @@ static bool channelInfoRead(const char* info, CkanEndpoint* configP, char* textB
     }
     else if ((strcmp(key, "apiKey") == 0) || (strcmp(key, "Authorization") == 0))
     {
-      snprintf(why, whySize, "'%s' in channelInfo - an API key goes in server.apiKey (or server.apiKeyEnv): channelInfo is shown on GET /ngsi-ld/v1/channels", key);
+      snprintf(why, whySize, "'%s' in channelInfo - an API key goes in server.apiKey (or server.apiKeyEnv): channelInfo is shown on GET /ngsi-ld/v1/dataChannels", key);
       ok = false;
     }
     else
@@ -314,7 +314,7 @@ static bool channelInfoRead(const char* info, CkanEndpoint* configP, char* textB
 //
 // Once per Channel, after init. Inbound topics only: a resource is read, nothing is written to the
 // portal (yet). A Channel refused here stays, dormant, with the reason - told to the broker
-// (channelStatusIn, ABI 12) before this returns, so GET /ngsi-ld/v1/channels shows it.
+// (channelStatusIn, ABI 12) before this returns, so GET /ngsi-ld/v1/dataChannels shows it.
 //
 static int ckanChannelAddInfo(const char* endpoint, BridgeChannelKind kind, BridgeDirection direction, const char* info)
 {
@@ -330,7 +330,7 @@ static int ckanChannelAddInfo(const char* endpoint, BridgeChannelKind kind, Brid
 
   if (direction != BridgeDirectionIn)
   {
-    channelStatus(endpoint, false, "this bridge reads resources, and writes none - a record Channel (\"records\") is inbound");
+    channelStatus(endpoint, false, "this bridge reads resources, and writes none - a DataChannel is inbound");
     return BRIDGE_UNSUPPORTED;
   }
 

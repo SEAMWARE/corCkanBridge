@@ -277,12 +277,14 @@ static void ckanError(CorNode* answerP, int status, char* why, int whySize)
 
 // -----------------------------------------------------------------------------
 //
-// recordTime - a record's time: its time column, else the read time
+// recordTime - a record's time: its time column; 0 - no time, and the broker writes no observedAt - when the
+//              DataChannel names none, or the record's is not a date-time. The read time is not the time of
+//              the data, and is not made to look like it
 //
-static int64_t recordTime(Job* jobP, CorNode* recordP, int64_t readTime, bool* warnedP)
+static int64_t recordTime(Job* jobP, CorNode* recordP, bool* warnedP)
 {
   if (jobP->config.timeColumn == NULL)
-    return readTime;
+    return 0;
 
   CorNode* timeP = corTreeLookup(recordP, jobP->config.timeColumn);
   int64_t  ns    = ((timeP != NULL) && (timeP->type == CorString)) ? ckanTimeParse(timeP->value.s) : -1;
@@ -292,12 +294,12 @@ static int64_t recordTime(Job* jobP, CorNode* recordP, int64_t readTime, bool* w
 
   if (*warnedP == false)
   {
-    COR_W("ckan: '%s': a record's '%s' is not an ISO 8601 date-time - its read time is used (said once per read)",
+    COR_W("ckan: '%s': a record's '%s' is not an ISO 8601 date-time - it has no time (said once per read)",
           jobP->endpoint, jobP->config.timeColumn);
     *warnedP = true;
   }
 
-  return readTime;
+  return 0;
 }
 
 
@@ -354,7 +356,6 @@ static bool pageRead(Job* jobP, int offset, PageResult* resultP, bool* warnedP, 
   if (body == NULL)
     return false;
 
-  int64_t  readTime = nowNs();
   char     buf[16 * 1024];
   CorAlloc ka;
   CorJson  cj;
@@ -410,7 +411,7 @@ static bool pageRead(Job* jobP, int offset, PageResult* resultP, bool* warnedP, 
       {
         corJsonFastRender(recordP, text);
 
-        if (receiveF(jobP->endpoint, text, recordTime(jobP, recordP, readTime, warnedP)) == true)
+        if (receiveF(jobP->endpoint, text, recordTime(jobP, recordP, warnedP)) == true)
           resultP->taken += 1;
 
         free(text);
