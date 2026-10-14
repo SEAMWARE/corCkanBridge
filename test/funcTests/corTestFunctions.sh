@@ -138,37 +138,37 @@ brokerAlive() {
 
 # -----------------------------------------------------------------------------
 #
-# channels - one line per Channel: endpoint, status, samplesIn - and why, when it says why
+# dataChannels - one line per DataChannel: endpoint, status, recordsIn, recordsRefused - and why, when it says why
 #
-channels() {
-  curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/channels" | python3 -c 'import sys, json
+dataChannels() {
+  curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/dataChannels" | python3 -c 'import sys, json
 for c in sorted(json.load(sys.stdin), key=lambda c: c["channelTarget"]):
-  line = "%s %s samplesIn=%s" % (c["channelTarget"], c["status"], c.get("samplesIn"))
+  line = "%s %s recordsIn=%s recordsRefused=%s" % (c["channelTarget"], c["status"], c.get("recordsIn"), c.get("recordsRefused"))
   print(line if c.get("statusReason") is None else "%s - %s" % (line, c["statusReason"]))'
 }
 
 
 # -----------------------------------------------------------------------------
 #
-# channelAwait <endpoint> <python condition on c> [seconds] - wait until GET /channels shows the
-#                                                             endpoint's Channel c meeting it
+# dataChannelAwait <endpoint> <python condition on c> [seconds] - wait until GET /dataChannels shows the
+#                                                                 endpoint's DataChannel c meeting it
 #
-#   channelAwait $CKAN_STATIONS 'c["samplesIn"] == 50'
-#   channelAwait nope 'c["status"] == "dormant"'
+#   dataChannelAwait $CKAN_STATIONS 'c["recordsIn"] == 50'
+#   dataChannelAwait nope 'c["status"] == "dormant"'
 #
-channelAwait() {
+dataChannelAwait() {
   local secs="${3:-20}" i
 
   for ((i = 0; i < secs * 10; i++)); do
-    curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/channels" | python3 -c 'import sys, json
+    curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/dataChannels" | python3 -c 'import sys, json
 found = [c for c in json.load(sys.stdin) if c["channelTarget"] == sys.argv[1]]
 c = found[0] if found else None
 sys.exit(0 if (c is not None) and ('"$2"') else 1)' "$1" 2>/dev/null && return 0
     sleep 0.1
   done
 
-  echo "channelAwait: '$1' does not meet $2 after ${secs}s:" >&2
-  channels >&2
+  echo "dataChannelAwait: '$1' does not meet $2 after ${secs}s:" >&2
+  dataChannels >&2
   return 1
 }
 

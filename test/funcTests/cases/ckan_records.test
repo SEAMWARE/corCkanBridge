@@ -15,7 +15,7 @@
 #                           - and the District itself, with its name
 #
 # Three pages (20, 20, 10 records), sorted by _id, each with the API key as its Authorization header;
-# the key is shown nowhere - not on GET /channels, not in the broker's log.
+# the key is shown nowhere - not on GET /dataChannels, not in the broker's log.
 #
 --NAME--
 ckan bridge - a resource's records, three pages, made into BikeStations and Districts
@@ -28,7 +28,7 @@ rm -rf "${CKAN_TEST_DIR:?}"
 mkdir -p "$CKAN_TEST_DIR"
 cat > $CKAN_TEST_DIR/bridges.json <<J
 { "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT", "apiKey": "not-a-real-key-7f3a", "timeoutMs": 5000 },
-            "ngsild": { "defaultEntity": false, "records": {
+            "ngsild": { "defaultEntity": false, "dataChannels": {
               "$CKAN_STATIONS": {
                 "channelInfo": [ { "key": "mode", "value": "once" }, { "key": "pageSize", "value": "20" } ],
                 "entities": [
@@ -48,8 +48,8 @@ brokerStart
 --RUN--
 echo "01. The resource is read - 50 records taken"
 echo "============================================"
-channelAwait $CKAN_STATIONS 'c["samplesIn"] == 50'
-channels
+dataChannelAwait $CKAN_STATIONS 'c["recordsIn"] == 50'
+dataChannels
 echo
 echo
 
@@ -86,14 +86,13 @@ echo
 echo
 
 
-echo "06. The Channel on GET /channels - its mapping as the file wrote it, and no API key"
-echo "===================================================================================="
-curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/channels" | python3 -c 'import sys, json
+echo "06. The DataChannel on GET /dataChannels - its mapping as the file wrote it, and no API key"
+echo "========================================================================================"
+curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/dataChannels" | python3 -c 'import sys, json
 c = json.load(sys.stdin)[0]
-print(json.dumps({k: c[k] for k in ("channelTarget", "channelKind", "channelDirection", "channelInfo", "status")}, indent=2, sort_keys=True))
-print("recordEntities: %s" % [e["type"] for e in c["recordEntities"]])
-print("entity in it: %s" % ("entity" in c))'
-echo "the key on GET /channels: $(curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/channels" | grep -c not-a-real-key)"
+print(json.dumps({k: c[k] for k in ("id", "type", "channelTarget", "channelInfo", "idEncoding", "status")}, indent=2, sort_keys=True))
+print("recordEntities: %s" % [e["type"] for e in c["recordEntities"]])'
+echo "the key on GET /dataChannels: $(curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/dataChannels" | grep -c not-a-real-key)"
 echo "the key in the broker's log: $(grep -c not-a-real-key "$CKAN_TEST_DIR/broker.log")"
 echo
 echo
@@ -107,7 +106,7 @@ rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a fai
 --EXPECT--
 01. The resource is read - 50 records taken
 ============================================
-44c931aa-4577-4caa-a8f2-ed1e38263e70 available samplesIn=50
+44c931aa-4577-4caa-a8f2-ed1e38263e70 available recordsIn=50 recordsRefused=0
 
 
 02. Three pages of 20, sorted by _id, the API key in the Authorization header
@@ -123,11 +122,9 @@ limit=20&offset=40&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id aut
   "id": "urn:ngsi-ld:BikeStation:A32000",
   "inDistrict": {
     "object": "urn:ngsi-ld:District:Boston",
-    "observedAt": "<read time>",
     "type": "Relationship"
   },
   "location": {
-    "observedAt": "<read time>",
     "type": "GeoProperty",
     "value": {
       "coordinates": [
@@ -138,17 +135,14 @@ limit=20&offset=40&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id aut
     }
   },
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "Fan Pier"
   },
   "public": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": true
   },
   "totalDocks": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": 15
   },
@@ -162,11 +156,9 @@ limit=20&offset=40&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id aut
   "id": "urn:ngsi-ld:BikeStation:B32007",
   "inDistrict": {
     "object": "urn:ngsi-ld:District:Boston",
-    "observedAt": "<read time>",
     "type": "Relationship"
   },
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "Seaport Square - Seaport Blvd at Northern Ave"
   },
@@ -176,11 +168,9 @@ limit=20&offset=40&resource_id=44c931aa-4577-4caa-a8f2-ed1e38263e70&sort=_id aut
   "id": "urn:ngsi-ld:BikeStation:L32001",
   "inDistrict": {
     "object": "urn:ngsi-ld:District:Arlington",
-    "observedAt": "<read time>",
     "type": "Relationship"
   },
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "Railroad Lot and Minuteman Bikeway"
   },
@@ -197,7 +187,6 @@ urn:ngsi-ld:District:Boston
 {
   "id": "urn:ngsi-ld:District:Arlington",
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "Arlington"
   },
@@ -205,10 +194,9 @@ urn:ngsi-ld:District:Boston
 }
 
 
-06. The Channel on GET /channels - its mapping as the file wrote it, and no API key
-====================================================================================
+06. The DataChannel on GET /dataChannels - its mapping as the file wrote it, and no API key
+========================================================================================
 {
-  "channelDirection": "in",
   "channelInfo": [
     {
       "key": "mode",
@@ -219,13 +207,14 @@ urn:ngsi-ld:District:Boston
       "value": "20"
     }
   ],
-  "channelKind": "topic",
   "channelTarget": "44c931aa-4577-4caa-a8f2-ed1e38263e70",
-  "status": "available"
+  "id": "urn:ngsi-ld:DataChannel:ckan:44c931aa-4577-4caa-a8f2-ed1e38263e70",
+  "idEncoding": "merge",
+  "status": "available",
+  "type": "DataChannel"
 }
 recordEntities: ['BikeStation', 'District']
-entity in it: False
-the key on GET /channels: 0
+the key on GET /dataChannels: 0
 the key in the broker's log: 0
 
 

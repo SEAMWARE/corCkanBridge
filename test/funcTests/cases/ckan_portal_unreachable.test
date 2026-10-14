@@ -18,7 +18,7 @@ rm -rf "${CKAN_TEST_DIR:?}"
 mkdir -p "$CKAN_TEST_DIR"
 cat > $CKAN_TEST_DIR/bridges.json <<J
 { "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT", "timeoutMs": 2000 },
-            "ngsild": { "defaultEntity": false, "records": {
+            "ngsild": { "defaultEntity": false, "dataChannels": {
               "$CKAN_STATIONS": { "entities": [ { "type": "BikeStation", "id": "urn:ngsi-ld:BikeStation:{Number}" } ] } } } } }
 J
 brokerStart                                           # and no mockStart: nothing listens on the portal's port
@@ -27,15 +27,15 @@ brokerStart                                           # and no mockStart: nothin
 echo "01. The broker answers at once; the Channel is available while it is tried"
 echo "==========================================================================="
 brokerAlive
-channels
+dataChannels
 echo
 echo
 
 
 echo "02. After three tries: dormant, and why"
 echo "======================================="
-channelAwait $CKAN_STATIONS 'c["status"] == "dormant"' 20
-channels
+dataChannelAwait $CKAN_STATIONS 'c["status"] == "dormant"' 20
+dataChannels
 brokerAlive
 echo
 echo
@@ -49,12 +49,12 @@ rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a fai
 01. The broker answers at once; the Channel is available while it is tried
 ===========================================================================
 broker up, GET /version: 200
-44c931aa-4577-4caa-a8f2-ed1e38263e70 available samplesIn=0
+44c931aa-4577-4caa-a8f2-ed1e38263e70 available recordsIn=0 recordsRefused=0
 
 
 02. After three tries: dormant, and why
 =======================================
-44c931aa-4577-4caa-a8f2-ed1e38263e70 dormant samplesIn=0 - the portal cannot be reached: Connection failed (-2)
+44c931aa-4577-4caa-a8f2-ed1e38263e70 dormant recordsIn=0 recordsRefused=0 - the portal cannot be reached: Connection failed (-2)
 broker up, GET /version: 200
 
 

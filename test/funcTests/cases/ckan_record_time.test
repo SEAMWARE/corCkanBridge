@@ -1,0 +1,78 @@
+#
+# FILE            ckan_record_time.test
+#
+# Copyright 2026 Seamware
+# SPDX-License-Identifier: Apache-2.0
+#
+# A record's time: the DataChannel's timeColumn, when it names one and the record's value is a date-time -
+# then every attribute the record writes has it as observedAt. Without a timeColumn, or with a value that is
+# not a date-time, the record has no time and its attributes no observedAt (not the time its page was read).
+#
+# fixtures/edge-cases.json, column Seen, one entity per record (urn:ngsi-ld:Row:{_id}):
+#
+#   1  "2026-10-09T12:00:00Z"   -> observedAt 2026-10-09T12:00:00Z
+#   2  "2026-10-09 13:30:00"    -> observedAt 2026-10-09T13:30:00Z (a space for the T, UTC)
+#   3  "not a date"             -> no observedAt - and a warning, once per read
+#   4  "2026-10-09"             -> observedAt 2026-10-09T00:00:00Z
+#   5  null                     -> no observedAt
+#
+# Without a timeColumn no record has a time: ckan_records and ckan_record_edges show no observedAt.
+#
+--NAME--
+ckan bridge - the record's time: timeColumn as observedAt, and no observedAt without one
+
+--TAGS--
+bridge ckan
+
+--INIT--
+rm -rf "${CKAN_TEST_DIR:?}"
+mkdir -p "$CKAN_TEST_DIR"
+cat > $CKAN_TEST_DIR/bridges.json <<J
+{ "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT" },
+            "ngsild": { "defaultEntity": false, "dataChannels": {
+              "edge-cases": {
+                "channelInfo": [ { "key": "timeColumn", "value": "Seen" } ],
+                "entities": [ { "type": "Row", "id": "urn:ngsi-ld:Row:{_id}", "attributes": { "name": { "column": "Name" } } } ] } } } } }
+J
+mockStart
+brokerStart
+
+--RUN--
+echo "01. Each record's entity, its name and observedAt"
+echo "=================================================="
+dataChannelAwait edge-cases 'c["recordsIn"] == 5'
+curl -s "localhost:$CKAN_PORT/ngsi-ld/v1/entities?type=Row&limit=10" | python3 -c 'import sys, json
+for e in sorted(json.load(sys.stdin), key=lambda e: e["id"]):
+  print("%s %s observedAt=%s" % (e["id"], e["name"]["value"], e["name"].get("observedAt", "-")))'
+echo
+echo
+
+
+echo "02. The warning for the value that is not a date-time: once"
+echo "==========================================================="
+grep -c "'edge-cases': a record's 'Seen' is not an ISO 8601 date-time - it has no time" "$CKAN_TEST_DIR/broker.log"
+echo
+echo
+
+
+--TEARDOWN--
+brokerStop
+mockStop
+rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a failure
+
+
+--EXPECT--
+01. Each record's entity, its name and observedAt
+==================================================
+urn:ngsi-ld:Row:1 No district observedAt=2026-10-09T12:00:00Z
+urn:ngsi-ld:Row:2 No number observedAt=2026-10-09T13:30:00Z
+urn:ngsi-ld:Row:3 No coordinates observedAt=-
+urn:ngsi-ld:Row:4 A district name with spaces observedAt=2026-10-09T00:00:00Z
+urn:ngsi-ld:Row:5 Null number observedAt=-
+
+
+02. The warning for the value that is not a date-time: once
+===========================================================
+1
+
+

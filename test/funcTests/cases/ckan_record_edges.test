@@ -27,7 +27,7 @@ rm -rf "${CKAN_TEST_DIR:?}"
 mkdir -p "$CKAN_TEST_DIR"
 cat > $CKAN_TEST_DIR/bridges.json <<J
 { "ckan": { "server": { "url": "http://localhost:$CKAN_MOCK_PORT" },
-            "ngsild": { "defaultEntity": false, "records": {
+            "ngsild": { "defaultEntity": false, "dataChannels": {
               "edge-cases": {
                 "channelInfo": [ { "key": "pageSize", "value": "2" } ],
                 "entities": [
@@ -47,9 +47,9 @@ brokerStart
 --RUN--
 echo "01. Three pages of 2, 2 and 1 - 4 records taken of 5"
 echo "====================================================="
-channelAwait edge-cases 'c["samplesIn"] == 4'
+dataChannelAwait edge-cases 'c["recordsIn"] == 4'
 sleep 0.3                                             # time for a fifth, were there one
-channels
+dataChannels
 mockRequests
 echo
 echo
@@ -81,7 +81,7 @@ rm -f "$CKAN_TEST_DIR/bridges.json"                   # the logs stay, for a fai
 --EXPECT--
 01. Three pages of 2, 2 and 1 - 4 records taken of 5
 =====================================================
-edge-cases available samplesIn=4
+edge-cases available recordsIn=4 recordsRefused=1
 limit=2&offset=0&resource_id=edge-cases&sort=_id auth=none
 limit=2&offset=2&resource_id=edge-cases&sort=_id auth=none
 limit=2&offset=4&resource_id=edge-cases&sort=_id auth=none
@@ -95,7 +95,6 @@ urn:ngsi-ld:BikeStation:E4
 {
   "id": "urn:ngsi-ld:BikeStation:E1",
   "location": {
-    "observedAt": "<read time>",
     "type": "GeoProperty",
     "value": {
       "coordinates": [
@@ -106,17 +105,14 @@ urn:ngsi-ld:BikeStation:E4
     }
   },
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "No district"
   },
   "public": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": false
   },
   "totalDocks": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": 8
   },
@@ -126,16 +122,13 @@ urn:ngsi-ld:BikeStation:E4
   "id": "urn:ngsi-ld:BikeStation:E3",
   "inDistrict": {
     "object": "urn:ngsi-ld:District:Boston",
-    "observedAt": "<read time>",
     "type": "Relationship"
   },
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "No coordinates"
   },
   "public": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": true
   },
@@ -145,11 +138,9 @@ urn:ngsi-ld:BikeStation:E4
   "id": "urn:ngsi-ld:BikeStation:E4",
   "inDistrict": {
     "object": "urn:ngsi-ld:District:South_Boston",
-    "observedAt": "<read time>",
     "type": "Relationship"
   },
   "totalDocks": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": 12
   },
@@ -164,7 +155,6 @@ urn:ngsi-ld:District:South_Boston
 {
   "id": "urn:ngsi-ld:District:South_Boston",
   "name": {
-    "observedAt": "<read time>",
     "type": "Property",
     "value": "South Boston"
   },
