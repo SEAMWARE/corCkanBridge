@@ -24,7 +24,7 @@
 //
 //   endpoint  a DataStore resource id ("44c931aa-4577-4caa-a8f2-ed1e38263e70")
 //   json      one record (row) of the resource - a JSON object, one member per column, "_id" included
-//   time      the record's time column, if the endpoint names one; else when its page was read
+//   time      the record's time column, if the endpoint names one; else 0 - no time, no observedAt
 //
 // How an endpoint is followed is its MODE. Only "once" is built: the resource is read whole, page by
 // page (datastore_search, limit/offset, sorted by _id), every record handed over, and the endpoint is

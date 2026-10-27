@@ -32,7 +32,8 @@ endif
 
 INCLUDE       = -I$(COR_LIBS)
 #
-# -fvisibility=hidden: the .so exports bridgeRegister and nothing else (it says so where it is defined)
+# -fvisibility=hidden: the .so exports bridgeRegister and corNodeLayout (weak, from corTree/CorNode.h),
+# nothing else (src/ckanRegister.c says so where bridgeRegister is defined)
 #
 CFLAGS        = -std=gnu11 -O2 -Wall -Werror -fPIC -fvisibility=hidden $(INCLUDE) -MMD -MP
 
