@@ -205,7 +205,7 @@ static void ckanClose(void)
 //
 //   mode        once (the default) - read the resource at start, then stop
 //   pageSize    records per datastore_search call, 1-32000 (default 100)
-//   timeColumn  a column holding each record's time, ISO 8601; without it, the time the page was read
+//   timeColumn  a column holding each record's time, ISO 8601; without it, a record has no time (no observedAt)
 //
 // The text is parsed in a copy; configP->timeColumn points into textBuf, the caller's, and lives as
 // long as it.
@@ -390,9 +390,10 @@ static const char* ckanVersionInfo(void)
 
 // -----------------------------------------------------------------------------
 //
-// bridgeRegister - the one symbol the broker looks for, and the one this .so exports
+// bridgeRegister - the one symbol the broker looks for
 //
-// Everything else is hidden (-fvisibility=hidden in the makefile).
+// The .so exports it and corNodeLayout - weak, defined by corTree/CorNode.h, which the broker checks when
+// it opens the plugin. Everything else is hidden (-fvisibility=hidden in the makefile).
 //
 // The broker zeroes the struct, writes ITS BRIDGE_ABI_VERSION into abiVersion, and calls this. The struct
 // is the broker's, allocated at the size of ITS header: a slot newer than the broker is not there, so a

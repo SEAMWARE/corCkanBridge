@@ -95,10 +95,22 @@ The endpoint (the member's name) is the resource id: a UUID, or a DataStore alia
 - `idEncoding` - how a value goes into an id: `merge` (the default; each character outside
   `[A-Za-z0-9._-]` becomes `_`, `South Boston` -> `South_Boston`, so values differing only there name
   one entity) or `percent` (each such byte becomes `%XX`, `South Boston` -> `South%20Boston`).
-- `attributes` - `{ "column": ... }` a Property (`"as": "number" | "boolean" | "string"` converts
-  `"15"` to 15, `"Yes"` to true); `{ "point": { "longitude": ..., "latitude": ... } }` a GeoProperty
-  Point; `{ "relationship": <template> }` a Relationship. A row without a value for one - an absent,
-  null or empty column, a value that does not convert - leaves that attribute out.
+- `attributes`:
+  - `{ "column": ... }` a Property; `"as"` converts the value: `number` (`"15"` to 15), `integer` (a
+    whole number: `"15"`, `15.0`), `float`, `boolean` (`yes`/`true`/`y`/`1`, `no`/`false`/`n`/`0`, any
+    case), `string`, `datetime` (ISO 8601, normalised to UTC - a DateTime value), `json` (a string
+    holding JSON, parsed);
+  - `{ "point": { "longitude": ..., "latitude": ... } }` a GeoProperty Point from two columns;
+    `{ "geo": ... }` a GeoProperty from one column: `"lat, lng"` (latitude first) or GeoJSON, an object
+    or its text;
+  - `{ "relationship": <template> }` a Relationship;
+  - `{ "json": ... }` a JsonProperty, `{ "vocab": ... }` a VocabProperty, `{ "languageMap": ... }` a
+    LanguageProperty (the column an object of language to text);
+  - `{ "value": <JSON> }` a Property whose value is always that - no column, no `observedAt`;
+  - `"unitCode"` with `column` or `value`.
+
+  A row without a value for one - an absent, null or empty column, a value that does not convert -
+  leaves that attribute out.
 
 All the entities of one row are written as one batch upsert with `options=update`: created when they
 are not there, their mapped attributes replaced, any other attribute left alone. DataChannels are
